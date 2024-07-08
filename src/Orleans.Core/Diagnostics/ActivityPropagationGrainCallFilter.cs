@@ -5,33 +5,35 @@ using System.Threading.Tasks;
 
 namespace Orleans.Runtime
 {
+    internal static class ActivitySources
+    {
+        public const string ApplicationGrainActivitySourceName = "Microsoft.Orleans.Application";
+        public const string RuntimeActivitySourceName = "Microsoft.Orleans.Runtime";
+
+        internal static readonly ActivitySource ApplicationGrainSource = new(ApplicationGrainActivitySourceName, "1.0.0");
+        internal static readonly ActivitySource RuntimeGrainSource = new(RuntimeActivitySourceName, "1.0.0");
+
+        internal const string RpcSystem = "orleans";
+    }
+
     /// <summary>
     /// A grain call filter which helps to propagate activity correlation information across a call chain.
     /// </summary>
     internal abstract class ActivityPropagationGrainCallFilter
     {
-        protected const string TraceParentHeaderName = "traceparent";
-        protected const string TraceStateHeaderName = "tracestate";
-
-        internal const string RpcSystem = "orleans";
         internal const string OrleansNamespacePrefix = "Orleans";
-        internal const string ApplicationGrainActivitySourceName = "Microsoft.Orleans.Application";
-        internal const string RuntimeActivitySourceName = "Microsoft.Orleans.Runtime";
-
-        protected static readonly ActivitySource ApplicationGrainSource = new(ApplicationGrainActivitySourceName, "1.0.0");
-        protected static readonly ActivitySource RuntimeGrainSource = new(RuntimeActivitySourceName, "1.0.0");
 
         protected static ActivitySource GetActivitySource(IGrainCallContext context) =>
             context.Request.GetInterfaceType().Namespace?.StartsWith(OrleansNamespacePrefix) == true
-                ? RuntimeGrainSource
-                : ApplicationGrainSource;
+                ? ActivitySources.RuntimeGrainSource
+                : ActivitySources.ApplicationGrainSource;
 
         protected static async Task Process(IGrainCallContext context, Activity activity)
         {
             if (activity is not null)
             {
                 // rpc attributes from https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/trace/semantic_conventions/rpc.md
-                activity.SetTag("rpc.system", RpcSystem);
+                activity.SetTag("rpc.system", ActivitySources.RpcSystem);
                 activity.SetTag("rpc.service", context.InterfaceName);
                 activity.SetTag("rpc.method", context.MethodName);
 

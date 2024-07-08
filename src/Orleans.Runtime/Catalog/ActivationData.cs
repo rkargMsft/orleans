@@ -3,7 +3,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -1104,6 +1103,7 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
 
     private void RehydrateInternal(IRehydrationContext context)
     {
+        using var activity = StartActivationActivity("Rehydrate");
         try
         {
             if (_shared.Logger.IsEnabled(LogLevel.Debug))
@@ -1156,6 +1156,7 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
 
     private void OnDehydrate(IDehydrationContext context)
     {
+        using var activity = StartActivationActivity("Dehydrate");
         if (_shared.Logger.IsEnabled(LogLevel.Debug))
         {
             _shared.Logger.LogDebug("Dehydrating grain activation");
@@ -1441,14 +1442,51 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
             {
                 _shared.Logger.LogDebug((int)ErrorCode.Catalog_BeforeCallingActivate, "Activating grain {Grain}", this);
             }
+            
+            Activity? startActivity = null;
+            string? traceParentString = null;
+            string? traceStateString = null;
 
+            var propagator = ActivationServices.GetService<DistributedContextPropagator>();
+
+            if (propagator is not null)
+            {
+                propagator.ExtractTraceIdAndState(requestContextData,
+                    (object? carrier, string fieldName, out string? fieldValue, out IEnumerable<string>? fieldValues) =>
+                    {
+                        fieldValues = default;
+                        if (requestContextData?.TryGetValue(fieldName, out var val) == true)
+                        {
+                            fieldValue = val as string;
+                        }
+                        else
+                        {
+                            fieldValue = null;
+                        }
+                    }, out traceParentString, out traceStateString);
+
+                startActivity = StartActivationActivity("Activate", ActivityKind.Internal, traceParentString);
+            }
+            else
+            {
+                startActivity = StartActivationActivity("Activate");
+            }
+
+            using var activity = startActivity;
             // Start grain lifecycle within try-catch wrapper to safely capture any exceptions thrown from called function
             try
             {
                 RequestContextExtensions.Import(requestContextData);
-                await Lifecycle.OnStart(cancellationToken).WithCancellation("Timed out waiting for grain lifecycle to complete activation", cancellationToken);
+                using (var onStartActivity = StartActivationActivity("OnStart"))
+                {
+                    await Lifecycle.OnStart(cancellationToken)
+                        .WithCancellation("Timed out waiting for grain lifecycle to complete activation",
+                            cancellationToken);
+                }
+
                 if (GrainInstance is IGrainBase grainBase)
                 {
+                    using var onActivateAsyncActivity = StartActivationActivity("OnActivateAsync");
                     await grainBase.OnActivateAsync(cancellationToken).WithCancellation($"Timed out waiting for {nameof(IGrainBase.OnActivateAsync)} to complete", cancellationToken);
                 }
 
@@ -1469,6 +1507,7 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
             }
             catch (Exception exception)
             {
+                activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
                 CatalogInstruments.ActivationFailedToActivate.Add(1);
 
                 // Capture the exception so that it can be propagated to rejection messages
@@ -1520,6 +1559,24 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
                 return false;
             }
         }
+    }
+    private Activity? StartActivationActivity(string activityName, ActivityKind kind = ActivityKind.Internal, string? traceParentString = null)
+    {
+        var activity = ActivitySources.ApplicationGrainSource.StartActivity(activityName, kind, traceParentString);
+        if (activity is not null)
+        {
+            // rpc attributes from https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/trace/semantic_conventions/rpc.md
+            activity.SetTag("rpc.system", ActivitySources.RpcSystem);
+            activity.SetTag("rpc.orleans.activation_id", ActivationId.ToParsableString());
+
+            if (activity.IsAllDataRequested)
+            {
+                activity.SetTag("rpc.orleans.placement_strategy", this.PlacementStrategy.GetType().Name);
+                // Custom attributes
+                activity.SetTag("rpc.orleans.target_id", GrainId.ToString());
+            }
+        }
+        return activity;
     }
 
     private async ValueTask<bool> RegisterActivationInGrainDirectoryAndValidate()
