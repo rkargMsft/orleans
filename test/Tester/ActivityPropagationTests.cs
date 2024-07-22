@@ -3,6 +3,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
+using Orleans.Placement;
+using Orleans.Runtime.Placement;
 using Orleans.Storage;
 using Orleans.TestingHost;
 using TestExtensions;
@@ -37,7 +39,13 @@ namespace UnitTests.General
                     hostBuilder
                         .AddActivityPropagation()
                         .AddMemoryGrainStorageAsDefault()
-                        .AddMemoryGrainStorage("PubSubStore");
+                        .AddMemoryGrainStorage("PubSubStore")
+                        .ConfigureServices(collection =>
+                        {
+                            collection
+                                .AddPlacementDirector<TestCustomPlacementStrategy,
+                                    TestPlacementStrategyFixedSiloDirector>();
+                        });
             }
 
             private class ClientConfigurator : IClientBuilderConfigurator
@@ -187,6 +195,11 @@ namespace UnitTests.General
             await activityGrain.GetActivityId();
 
             // Assert
+            // IActivityGrain/GetActivityId(Client)
+            // └── Activate(Internal)
+            //     └── OnStart(Internal)
+            //         └── IActivityGrain/GetActivityId(Server)
+
             var clientCallActivity = _activities.SingleOrDefault(a => a.OperationName == "IActivityGrain/GetActivityId" && a.Kind == ActivityKind.Client);
             Assert.NotNull(clientCallActivity);
 
@@ -241,14 +254,55 @@ namespace UnitTests.General
             
             await activityGrain.Migrate();
 
-            MigrationTestGrain.Deactivated.WaitOne();
+            var deactivationDuration = Debugger.IsAttached ? TimeSpan.FromMinutes(5) : TimeSpan.FromSeconds(5);
+            var success = MigrationTestGrain.Deactivated.WaitOne(deactivationDuration);
+            Assert.True(success, "Migration never triggered");
 
-            Assert.Contains(_activities, a => a.OperationName == "Dehydrate");
-            Assert.Contains(_activities, a => a.OperationName == "Deactivate");
+            var startDeactivating = _activities.SingleOrDefault(a => a.OperationName == "StartDeactivating");
+            Assert.NotNull(startDeactivating);
+
+            var finishDeactivating = _activities.SingleOrDefault(a => a.OperationName == "FinishDeactivating");
+            Assert.NotNull(finishDeactivating);
+
+            var dehydrate = _activities.SingleOrDefault(a => a.OperationName == "Dehydrate");
+            Assert.NotNull(dehydrate);
+            Assert.Equal(startDeactivating.ParentSpanId, finishDeactivating.ParentSpanId);
+            Assert.Equal(finishDeactivating.SpanId, dehydrate.ParentSpanId);
 
             _activities.Clear();
             // Act
             await activityGrain.MethodCall();
+
+            var rehydrate = _activities.SingleOrDefault(a => a.OperationName == "Rehydrate");
+            Assert.NotNull(rehydrate);
+
+            var activate = _activities.SingleOrDefault(a => a.OperationName == "Activate");
+            Assert.NotNull(activate);
+
+            var onStart = _activities.SingleOrDefault(a => a.OperationName == "OnStart");
+            Assert.NotNull(onStart);
+
+            var onActivateAsync = _activities.SingleOrDefault(a => a.OperationName == "OnActivateAsync");
+            Assert.NotNull(onActivateAsync);
+
+            var methodCallClient = _activities.SingleOrDefault(a => a.OperationName == "IMigrationTestGrain/MethodCall" && a.Kind == ActivityKind.Client);
+            Assert.NotNull(methodCallClient);
+
+            var methodCallServer = _activities.SingleOrDefault(a => a.OperationName == "IMigrationTestGrain/MethodCall" && a.Kind == ActivityKind.Server);
+            Assert.NotNull(methodCallServer);
+
+            var migrateCallClient = _activities.SingleOrDefault(a => a.OperationName == "IActivationMigrationManagerSystemTarget/AcceptMigratingGrains" && a.Kind == ActivityKind.Client);
+            Assert.NotNull(migrateCallClient);
+
+            var migrateCallServer = _activities.SingleOrDefault(a => a.OperationName == "IActivationMigrationManagerSystemTarget/AcceptMigratingGrains" && a.Kind == ActivityKind.Server);
+            Assert.NotNull(migrateCallServer);
+
+            Assert.Equal(activate.SpanId, onStart.ParentSpanId);
+            Assert.Equal(activate.SpanId, onActivateAsync.ParentSpanId);
+            Assert.Equal(migrateCallServer.SpanId, rehydrate.ParentSpanId);
+            Assert.Equal(migrateCallClient.SpanId, migrateCallServer.ParentSpanId);
+            Assert.Equal(activate.SpanId, onStart.ParentSpanId);
+            Assert.Equal(activate.SpanId, onStart.ParentSpanId);
 
             Assert.Contains(_activities, a => a.OperationName == "Rehydrate");
             Assert.Contains(_activities, a => a.OperationName == "Activate");
@@ -265,6 +319,7 @@ namespace UnitTests.General
         public Task MethodCall();
     }
 
+    [TestPlacementStrategy(CustomPlacementScenario.DifferentSilo)]
     public class MigrationTestGrain : Grain, IMigrationTestGrain, IGrainMigrationParticipant
     {
         public static ManualResetEvent Deactivated = new ManualResetEvent(false);

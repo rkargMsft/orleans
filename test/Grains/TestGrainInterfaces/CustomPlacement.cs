@@ -20,6 +20,7 @@ namespace UnitTests.GrainInterfaces
         FixedSilo,
         ExcludeOne,
         RequestContextBased,
+        DifferentSilo
     }
 
     [Serializable]
@@ -34,6 +35,7 @@ namespace UnitTests.GrainInterfaces
         public static TestCustomPlacementStrategy FixedSilo { get; } = new TestCustomPlacementStrategy(CustomPlacementScenario.FixedSilo);
         public static TestCustomPlacementStrategy ExcludeOne { get; } = new TestCustomPlacementStrategy(CustomPlacementScenario.ExcludeOne);
         public static TestCustomPlacementStrategy RequestContextBased { get; } = new TestCustomPlacementStrategy(CustomPlacementScenario.RequestContextBased);
+        public static TestCustomPlacementStrategy DifferentSilo { get; } = new TestCustomPlacementStrategy(CustomPlacementScenario.DifferentSilo);
 
         internal TestCustomPlacementStrategy(CustomPlacementScenario scenario)
         {
@@ -80,6 +82,8 @@ namespace UnitTests.GrainInterfaces
                     return TestCustomPlacementStrategy.ExcludeOne;
                 case CustomPlacementScenario.RequestContextBased:
                     return TestCustomPlacementStrategy.RequestContextBased;
+                case CustomPlacementScenario.DifferentSilo:
+                    return TestCustomPlacementStrategy.DifferentSilo;
                 default:
                     throw new Exception("Unknown CustomPlacementScenario");
             }

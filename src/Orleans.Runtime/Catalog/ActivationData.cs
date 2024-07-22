@@ -35,6 +35,7 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
     private readonly List<(Message Message, CoarseStopwatch QueuedTime)> _waitingRequests = new();
     private readonly Dictionary<Message, CoarseStopwatch> _runningRequests = new();
     private readonly SingleWaiterAutoResetEvent _workSignal = new() { RunContinuationsAsynchronously = true };
+    private readonly DistributedContextPropagator? _distributedTracingPropagator;
     private GrainLifecycle? _lifecycle;
     private List<object>? _pendingOperations;
     private Message? _blockingRequest;
@@ -67,6 +68,7 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
         _isInWorkingSet = true;
         _workItemGroup = createWorkItemGroup(this);
         _messageLoopTask = this.RunOrQueueTask(RunMessageLoop);
+        _distributedTracingPropagator = ActivationServices.GetService<DistributedContextPropagator>();
     }
 
     public IGrainRuntime GrainRuntime => _shared.Runtime;
@@ -489,7 +491,7 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
 
             lock (this)
             {
-                if (!StartDeactivating(new DeactivationReason(DeactivationReasonCode.Migrating, "Migrating to a new location")))
+                if (!StartDeactivating(requestContext, new DeactivationReason(DeactivationReasonCode.Migrating, "Migrating to a new location")))
                 {
                     // Grain is already deactivating, ignore the migration request.
                     return;
@@ -527,7 +529,10 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
         var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(_shared.InternalRuntime.CollectionOptions.Value.DeactivationTimeout);
 
-        StartDeactivating(reason);
+        var requestContext = RequestContext.CallContextData.Value.Values;
+
+        StartDeactivating(requestContext, reason);
+        
         ScheduleOperation(new Command.Deactivate(cts));
     }
 
@@ -1103,7 +1108,7 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
 
     private void RehydrateInternal(IRehydrationContext context)
     {
-        using var activity = StartActivationActivity("Rehydrate");
+        using var activity = InnerStartActivity("Rehydrate");
         try
         {
             if (_shared.Logger.IsEnabled(LogLevel.Debug))
@@ -1156,7 +1161,7 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
 
     private void OnDehydrate(IDehydrationContext context)
     {
-        using var activity = StartActivationActivity("Dehydrate");
+        using var activity = InnerStartActivity("Dehydrate");
         if (_shared.Logger.IsEnabled(LogLevel.Debug))
         {
             _shared.Logger.LogDebug("Dehydrating grain activation");
@@ -1391,6 +1396,21 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
     public void Activate(Dictionary<string, object>? requestContext, CancellationToken cancellationToken)
     {
         var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        requestContext ??= RequestContext.CallContextData?.Value.Values;
+
+        if (requestContext is null && _distributedTracingPropagator is not null)
+        {
+            requestContext ??= new Dictionary<string, object>();
+            _distributedTracingPropagator.Inject(Activity.Current, requestContext,
+                static (carrier, fieldName, fieldValue) =>
+                {
+                    if (carrier is Dictionary<string, object> dict)
+                    {
+                        dict[fieldName] = fieldValue;
+                    }
+                });
+        }
         cts.CancelAfter(_shared.InternalRuntime.CollectionOptions.Value.ActivationTimeout);
 
         ScheduleOperation(new Command.Activate(requestContext, cts));
@@ -1443,41 +1463,14 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
                 _shared.Logger.LogDebug((int)ErrorCode.Catalog_BeforeCallingActivate, "Activating grain {Grain}", this);
             }
             
-            Activity? startActivity = null;
-            string? traceParentString = null;
-            string? traceStateString = null;
+            var activateActivity = InnerStartActivity("Activate", requestContextData);
 
-            var propagator = ActivationServices.GetService<DistributedContextPropagator>();
-
-            if (propagator is not null)
-            {
-                propagator.ExtractTraceIdAndState(requestContextData,
-                    (object? carrier, string fieldName, out string? fieldValue, out IEnumerable<string>? fieldValues) =>
-                    {
-                        fieldValues = default;
-                        if (requestContextData?.TryGetValue(fieldName, out var val) == true)
-                        {
-                            fieldValue = val as string;
-                        }
-                        else
-                        {
-                            fieldValue = null;
-                        }
-                    }, out traceParentString, out traceStateString);
-
-                startActivity = StartActivationActivity("Activate", ActivityKind.Internal, traceParentString);
-            }
-            else
-            {
-                startActivity = StartActivationActivity("Activate");
-            }
-
-            using var activity = startActivity;
+            using var activity = activateActivity;
             // Start grain lifecycle within try-catch wrapper to safely capture any exceptions thrown from called function
             try
             {
                 RequestContextExtensions.Import(requestContextData);
-                using (var onStartActivity = StartActivationActivity("OnStart"))
+                using (var onStartActivity = InnerStartActivity("OnStart"))
                 {
                     await Lifecycle.OnStart(cancellationToken)
                         .WithCancellation("Timed out waiting for grain lifecycle to complete activation",
@@ -1486,7 +1479,7 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
 
                 if (GrainInstance is IGrainBase grainBase)
                 {
-                    using var onActivateAsyncActivity = StartActivationActivity("OnActivateAsync");
+                    using var onActivateAsyncActivity = InnerStartActivity("OnActivateAsync");
                     await grainBase.OnActivateAsync(cancellationToken).WithCancellation($"Timed out waiting for {nameof(IGrainBase.OnActivateAsync)} to complete", cancellationToken);
                 }
 
@@ -1560,7 +1553,64 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
             }
         }
     }
-    private Activity? StartActivationActivity(string activityName, ActivityKind kind = ActivityKind.Internal, string? traceParentString = null)
+
+    private Activity? InnerStartActivity(string activityName, Dictionary<string, object>? requestContextData = null, ActivityKind kind = ActivityKind.Internal)
+    {
+        Activity? activity = null;
+        string? traceStateString = null;
+
+        if (_distributedTracingPropagator is not null)
+        {
+            _distributedTracingPropagator.ExtractTraceIdAndState(requestContextData,
+                static (object? carrier, string fieldName, out string? fieldValue, out IEnumerable<string>? fieldValues) =>
+                {
+                    fieldValues = default;
+
+                    if (carrier is Dictionary<string, object> dict && dict.TryGetValue(fieldName, out var val) == true)
+                    {
+                        fieldValue = val as string;
+                    }
+                    else
+                    {
+                        fieldValue = null;
+                    }
+                }, out var traceParentString, out traceStateString);
+
+            activity = StartActivationActivity(activityName, kind, traceParentString);
+        }
+        else
+        {
+            activity = StartActivationActivity(activityName, kind);
+        }
+        if (activity is not null)
+        {
+            if (!string.IsNullOrEmpty(traceStateString))
+            {
+                activity.TraceStateString = traceStateString;
+            }
+
+            if(_distributedTracingPropagator is not null)
+            {
+                var baggage = _distributedTracingPropagator.ExtractBaggage(null, static (object? carrier, string fieldName, out string? fieldValue, out IEnumerable<string>? fieldValues) =>
+                {
+                    fieldValues = default;
+                    fieldValue = RequestContext.Get(fieldName) as string;
+                });
+
+                if (baggage is not null)
+                {
+                    foreach (var baggageItem in baggage)
+                    {
+                        activity.AddBaggage(baggageItem.Key, baggageItem.Value);
+                    }
+                }
+            }
+        }
+
+        return activity;
+    }
+
+    private Activity? StartActivationActivity(string activityName, ActivityKind kind, string? traceParentString = null)
     {
         var activity = ActivitySources.ApplicationGrainSource.StartActivity(activityName, kind, traceParentString);
         if (activity is not null)
@@ -1689,8 +1739,11 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
     /// <summary>
     /// Starts the deactivation process.
     /// </summary>
-    public bool StartDeactivating(DeactivationReason reason)
+    public bool StartDeactivating(Dictionary<string, object>? requestContext, DeactivationReason reason)
     {
+        using var activity = InnerStartActivity("StartDeactivating", requestContext);
+        activity?.SetTag("rpc.orleans.deactivation_reason", reason.ReasonCode.ToString());
+
         lock (this)
         {
             if (State is ActivationState.Deactivating or ActivationState.Invalid or ActivationState.FailedToActivate)
@@ -1725,6 +1778,8 @@ internal sealed class ActivationData : IGrainContext, ICollectibleGrainContext, 
     /// <param name="cancellationToken">A cancellation which terminates graceful deactivation when cancelled.</param>
     private async Task FinishDeactivating(CancellationToken cancellationToken)
     {
+        using var activity = InnerStartActivity("FinishDeactivating", DehydrationContext?.RequestContext);
+
         var migrated = false;
         try
         {

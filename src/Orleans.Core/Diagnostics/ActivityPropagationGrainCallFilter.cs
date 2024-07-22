@@ -23,10 +23,19 @@ namespace Orleans.Runtime
     {
         internal const string OrleansNamespacePrefix = "Orleans";
 
-        protected static ActivitySource GetActivitySource(IGrainCallContext context) =>
-            context.Request.GetInterfaceType().Namespace?.StartsWith(OrleansNamespacePrefix) == true
+        protected static ActivitySource GetActivitySource(IGrainCallContext context)
+        {
+            var interfaceType = context.Request.GetInterfaceType();
+            var interfaceName = interfaceType?.FullName;
+            if (interfaceName == "Orleans.Runtime.IActivationMigrationManagerSystemTarget")
+            {
+                return ActivitySources.ApplicationGrainSource;
+            }
+
+            return interfaceType.Namespace?.StartsWith(OrleansNamespacePrefix) == true
                 ? ActivitySources.RuntimeGrainSource
                 : ActivitySources.ApplicationGrainSource;
+        }
 
         protected static async Task Process(IGrainCallContext context, Activity activity)
         {

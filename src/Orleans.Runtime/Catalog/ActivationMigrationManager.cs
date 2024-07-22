@@ -34,6 +34,9 @@ internal struct GrainMigrationPackage
 
     [Id(1)]
     public MigrationContext MigrationContext { get; set; }
+
+    [Id(2)]
+    public Dictionary<string, object>? RequestContext { get; set; }
 }
 
 /// <summary>
@@ -100,7 +103,7 @@ internal class ActivationMigrationManager : SystemTarget, IActivationMigrationMa
         {
             // If the activation does not exist, create it and provide it with the migration context while doing so.
             // If the activation already exists or cannot be created, it is too late to perform migration, so ignore the request.
-            var context = _catalog.GetOrCreateActivation(package.GrainId, requestContextData: null, package.MigrationContext);
+            var context = _catalog.GetOrCreateActivation(package.GrainId, requestContextData: package.RequestContext, package.MigrationContext);
             if (context is ActivationData activation)
             {
                 activations.Add(activation);
@@ -135,7 +138,7 @@ internal class ActivationMigrationManager : SystemTarget, IActivationMigrationMa
     public ValueTask MigrateAsync(SiloAddress targetSilo, GrainId grainId, MigrationContext migrationContext)
     {
         var workItem = _workItemPool.Get();
-        var migrationPackage = new GrainMigrationPackage { GrainId = grainId, MigrationContext = migrationContext };
+        var migrationPackage = new GrainMigrationPackage { GrainId = grainId, MigrationContext = migrationContext, RequestContext = RequestContext.CallContextData?.Value.Values};
         workItem.Initialize(migrationPackage);
         var workItemWriter = GetOrCreateWorker(targetSilo);
         if (!workItemWriter.TryWrite(workItem))

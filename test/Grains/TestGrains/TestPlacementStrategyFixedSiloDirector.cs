@@ -24,6 +24,16 @@ namespace UnitTests.GrainInterfaces
                     var index = (int)target.RequestContextData[TARGET_SILO_INDEX];
                     return Task.FromResult(silos[index]);
 
+                case CustomPlacementScenario.DifferentSilo:
+                    if (silos[0].Equals(context.LocalSilo))
+                    {
+                        return Task.FromResult(silos[1]);
+                    }
+                    else
+                    {
+                        return Task.FromResult(silos[0]);
+                    }
+
                 default:
                     throw new InvalidOperationException(); // should never get here, only to make compiler happy
             }
