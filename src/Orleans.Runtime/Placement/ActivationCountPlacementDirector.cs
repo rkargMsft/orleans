@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
+using Orleans.Runtime;
 
 namespace Orleans.Runtime.Placement
 {
@@ -124,4 +125,22 @@ namespace Orleans.Runtime.Placement
             _localCache.TryRemove(removedSilo, out _);
         }
     }
+}
+
+public class SiloStatisticsCache : ISiloStatisticsChangeListener
+{
+    // Track created activations on this silo between statistic intervals.
+    private readonly ConcurrentDictionary<SiloAddress, SiloRuntimeStatistics> _localCache = new();
+
+    internal SiloStatisticsCache(
+        DeploymentLoadPublisher deploymentLoadPublisher)
+    {
+        deploymentLoadPublisher?.SubscribeToStatisticsChangeEvents(this);
+    }
+    public void SiloStatisticsChangeNotification(SiloAddress updatedSilo, SiloRuntimeStatistics newSiloStats) =>
+        _localCache[updatedSilo] = newSiloStats;
+
+    public void RemoveSilo(SiloAddress removedSilo) => _localCache.TryRemove(removedSilo, out _);
+
+    public bool TryGetStatistics(SiloAddress silo, out SiloRuntimeStatistics statistics) => _localCache.TryGetValue(silo, out statistics);
 }
