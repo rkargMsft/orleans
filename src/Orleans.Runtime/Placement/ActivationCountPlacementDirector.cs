@@ -6,7 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
-using Orleans.Runtime;
 
 namespace Orleans.Runtime.Placement
 {
