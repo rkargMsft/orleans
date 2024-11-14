@@ -60,15 +60,9 @@ public class SiloMetadataCache : IDisposable
         }
     }
 
-    public SiloMetadata GetMetadata(SiloAddress siloAddress)
-    {
-        return _metadata.GetValueOrDefault(siloAddress);
-    }
+    public SiloMetadata GetMetadata(SiloAddress siloAddress) => _metadata.GetValueOrDefault(siloAddress);
 
-    public void SetMetadata(SiloAddress siloAddress, SiloMetadata metadata)
-    {
-        _metadata[siloAddress] = metadata;
-    }
+    public void SetMetadata(SiloAddress siloAddress, SiloMetadata metadata) => _metadata.TryAdd(siloAddress, metadata);
 
     public void Dispose()
     {
