@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -16,20 +17,20 @@ public class SiloMetadataPlacementOptions
     // And so on.
     // If no silos match on the final key, then it will return a random compatible silo.
     public string[] DefaultMetadataKeys { get; set; }
-
-    public Dictionary<>
 }
 
-public class SiloMetadataPlacementDirector : IPlacementDirector
+internal class SiloMetadataPlacementDirector : IPlacementDirector
 {
     private readonly ISiloMetadataClient _siloMetadataClient;
+    private readonly ResourceOptimizedPlacementLogic _resourceOptimizedPlacementLogic;
     private readonly SiloStatisticsCache _siloStatisticsCache;
     private readonly SiloAddress _localAddress;
     private readonly string[] _metadataValues;
 
-    public SiloMetadataPlacementDirector(ILocalSiloDetails localSiloDetails, ISiloMetadataClient siloMetadataClient, SiloStatisticsCache siloStatisticsCache, IOptions<SiloMetadataPlacementOptions> options)
+    internal SiloMetadataPlacementDirector(ILocalSiloDetails localSiloDetails, ISiloMetadataClient siloMetadataClient, ResourceOptimizedPlacementLogic resourceOptimizedPlacementLogic, SiloStatisticsCache siloStatisticsCache, IOptions<SiloMetadataPlacementOptions> options)
     {
         _siloMetadataClient = siloMetadataClient;
+        _resourceOptimizedPlacementLogic = resourceOptimizedPlacementLogic;
         _siloStatisticsCache = siloStatisticsCache;
         _localAddress = localSiloDetails.SiloAddress;
         _metadataValues = options.Value.DefaultMetadataKeys;
@@ -57,31 +58,46 @@ public class SiloMetadataPlacementDirector : IPlacementDirector
         var localSiloMetadata = await _siloMetadataClient.GetSiloMetadata(_localAddress);
         var localMetadataValues = GetMetadataValues(localSiloMetadata);
 
-        Random.Shared.Shuffle(compatibleSilos);
-
-        // If we don't have a full match, then store the first instance of each partial match
-        var fallbackSilos = new SiloAddress[_metadataValues.Length - 1];
-
-        foreach (var silo in compatibleSilos)
+        var candidateSilos = new List<SiloAddress>();
+        for(var i = 0; i < _metadataValues.Length; i++)
         {
-            var siloMetadata = await _siloMetadataClient.GetSiloMetadata(silo);
-            var siloMetadataValues = GetMetadataValues(siloMetadata);
-            if (localMetadataValues.SequenceEqual(siloMetadataValues))
+            candidateSilos.Clear();
+            foreach (var silo in compatibleSilos)
             {
-                return silo;
-            }
-            for (var i = 0; i < fallbackSilos.Length; i++)
-            {
-                if (fallbackSilos[i] is null && localMetadataValues.Skip(i + 1).SequenceEqual(siloMetadataValues.Skip(i + 1)))
+                var siloMetadata = await _siloMetadataClient.GetSiloMetadata(silo);
+                var siloMetadataValues = GetMetadataValues(siloMetadata);
+                if (localMetadataValues.AsSpan(i).SequenceEqual(siloMetadataValues.AsSpan(i)))
                 {
-                    fallbackSilos[i] = silo;
-                    break;
+                    candidateSilos.Add(silo);
                 }
+            }
+            if (candidateSilos.Count > 0)
+            {
+                return await _resourceOptimizedPlacementLogic.PickSilo(context, candidateSilos: candidateSilos.ToArray());
             }
         }
 
-        return fallbackSilos.FirstOrDefault(s => s is not null) ?? compatibleSilos[0];
+        return await _resourceOptimizedPlacementLogic.PickSilo(context, candidateSilos: compatibleSilos);
     }
 
     private string[] GetMetadataValues(SiloMetadata localSiloMetadata) => _metadataValues.Select(key => localSiloMetadata.Metadata.GetValueOrDefault(key)).ToArray();
+}
+
+
+public class SiloStatisticsCache : ISiloStatisticsChangeListener
+{
+    // Track created activations on this silo between statistic intervals.
+    private readonly ConcurrentDictionary<SiloAddress, SiloRuntimeStatistics> _localCache = new();
+
+    internal SiloStatisticsCache(
+        DeploymentLoadPublisher deploymentLoadPublisher)
+    {
+        deploymentLoadPublisher?.SubscribeToStatisticsChangeEvents(this);
+    }
+    public void SiloStatisticsChangeNotification(SiloAddress updatedSilo, SiloRuntimeStatistics newSiloStats) =>
+        _localCache[updatedSilo] = newSiloStats;
+
+    public void RemoveSilo(SiloAddress removedSilo) => _localCache.TryRemove(removedSilo, out _);
+
+    public bool TryGetStatistics(SiloAddress silo, out SiloRuntimeStatistics statistics) => _localCache.TryGetValue(silo, out statistics);
 }
