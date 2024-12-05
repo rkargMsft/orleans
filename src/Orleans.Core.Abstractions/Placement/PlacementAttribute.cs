@@ -9,6 +9,27 @@ namespace Orleans.Placement
     /// Base for all placement policy marker attributes.
     /// </summary>
     [AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
+    public abstract class PlacementFilterAttribute : Attribute, IGrainPropertiesProviderAttribute
+    {
+        public PlacementFilter PlacementFilter { get; private set; }
+
+        protected PlacementFilterAttribute(PlacementFilter placement)
+        {
+            if (placement == null) throw new ArgumentNullException(nameof(placement));
+
+            this.PlacementFilter = placement;
+        }
+
+        /// <inheritdoc />
+        public virtual void Populate(IServiceProvider services, Type grainClass, GrainType grainType, Dictionary<string, string> properties)
+        {
+            this.PlacementFilter?.PopulateGrainProperties(services, grainClass, grainType, properties);
+        }
+    }
+    /// <summary>
+    /// Base for all placement policy marker attributes.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
     public abstract class PlacementAttribute : Attribute, IGrainPropertiesProviderAttribute
     {
         public PlacementStrategy PlacementStrategy { get; private set; }

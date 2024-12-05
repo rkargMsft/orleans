@@ -12,6 +12,70 @@ using Orleans.GrainDirectory;
 namespace Orleans.Runtime.Placement
 {
     /// <summary>
+    /// Responsible for resolving an <see cref="PlacementFilter"/> for a <see cref="GrainType"/>.
+    /// </summary>
+    public sealed class PlacementFilterResolver
+    {
+        private readonly ConcurrentDictionary<GrainType, PlacementFilter> _resolvedStrategies = new();
+        private readonly Func<GrainType, PlacementFilter> _getStrategyInternal;
+        private readonly GrainPropertiesResolver _grainPropertiesResolver;
+        private readonly PlacementFilter _defaultPlacementStrategy;
+        private readonly IServiceProvider _services;
+
+        /// <summary>
+        /// Create a <see cref="PlacementStrategyResolver"/> instance.
+        /// </summary>
+        public PlacementFilterResolver(
+            IServiceProvider services,
+            IEnumerable<IPlacementStrategyResolver> resolvers,
+            GrainPropertiesResolver grainPropertiesResolver)
+        {
+            _services = services;
+            _getStrategyInternal = GetPlacementStrategyInternal;
+            _grainPropertiesResolver = grainPropertiesResolver;
+            _defaultPlacementStrategy = services.GetService<PlacementFilter>();
+        }
+
+        /// <summary>
+        /// Gets the placement strategy associated with the provided grain type.
+        /// </summary>
+        public PlacementFilter GetPlacementStrategy(GrainType grainType) => _resolvedStrategies.GetOrAdd(grainType, _getStrategyInternal);
+
+        private bool TryGetNonDefaultPlacementStrategy(GrainType grainType, out PlacementFilter strategy)
+        {
+            _grainPropertiesResolver.TryGetGrainProperties(grainType, out var properties);
+
+            if (properties is not null
+                && properties.Properties.TryGetValue(WellKnownGrainTypeProperties.PlacementStrategy, out var placementStrategyId)
+                && !string.IsNullOrWhiteSpace(placementStrategyId))
+            {
+                strategy = _services.GetKeyedService<PlacementFilter>(placementStrategyId);
+                if (strategy is not null)
+                {
+                    strategy.Initialize(properties);
+                    return true;
+                }
+                else
+                {
+                    throw new KeyNotFoundException($"Could not resolve placement strategy {placementStrategyId} for grain type {grainType}.");
+                }
+            }
+
+            strategy = default;
+            return false;
+        }
+
+        private PlacementFilter GetPlacementStrategyInternal(GrainType grainType)
+        {
+            if (TryGetNonDefaultPlacementStrategy(grainType, out var result))
+            {
+                return result;
+            }
+
+            return _defaultPlacementStrategy;
+        }
+    }
+    /// <summary>
     /// Responsible for resolving an <see cref="PlacementStrategy"/> for a <see cref="GrainType"/>.
     /// </summary>
     public sealed class PlacementStrategyResolver
