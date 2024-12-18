@@ -1,5 +1,6 @@
 using System;
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Placement;
 using Orleans.Runtime;
 using Orleans.Runtime.Placement;
 
@@ -62,6 +63,22 @@ namespace Orleans.Hosting
         {
             services.Add(ServiceDescriptor.DescribeKeyed(typeof(PlacementStrategy), typeof(TStrategy).Name, typeof(TStrategy), strategyLifetime));
             services.AddKeyedSingleton<IPlacementDirector, TDirector>(typeof(TStrategy));
+        }
+
+
+        /// <summary>
+        /// Configures a <typeparamref name="TFilter"/> for filtering candidate grain placements.
+        /// </summary>
+        /// <typeparam name="TFilter">The placement filter.</typeparam>
+        /// <param name="services">The service collection.</param>
+        /// <param name="strategyLifetime">The lifetime of the placement strategy.</param>
+        /// <returns>The service collection.</returns>
+        public static void AddPlacementFilter<TFilter, TDirector>(this IServiceCollection services, ServiceLifetime strategyLifetime)
+            where TFilter : PlacementFilter
+            where TDirector : class, IFilterDirector
+        {
+            services.Add(ServiceDescriptor.DescribeKeyed(typeof(PlacementFilter), typeof(TFilter).Name, typeof(TFilter), strategyLifetime));
+            services.AddKeyedSingleton<IFilterDirector, TDirector>(typeof(TFilter));
         }
 
         /// <summary>

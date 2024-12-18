@@ -4,33 +4,6 @@ using Orleans.Metadata;
 
 namespace Orleans.Runtime
 {
-    public abstract class PlacementFilter
-    {
-        public abstract SiloAddress[] Filter(SiloAddress[] silos);
-
-        /// <summary>
-        /// Initializes an instance of this type using the provided grain properties.
-        /// </summary>
-        /// <param name="properties">
-        /// The grain properties.
-        /// </param>
-        public virtual void Initialize(GrainProperties properties)
-        {
-        }
-
-        /// <summary>
-        /// Populates grain properties to specify the preferred placement strategy.
-        /// </summary>
-        /// <param name="services">The service provider.</param>
-        /// <param name="grainClass">The grain class.</param>
-        /// <param name="grainType">The grain type.</param>
-        /// <param name="properties">The grain properties which will be populated by this method call.</param>
-        public virtual void PopulateGrainProperties(IServiceProvider services, Type grainClass, GrainType grainType, Dictionary<string, string> properties)
-        {
-            properties[WellKnownGrainTypeProperties.PlacementFilter] = this.GetType().Name;
-        }
-    }
-
     /// <summary>
     /// The base type for all placement strategies.
     /// </summary>

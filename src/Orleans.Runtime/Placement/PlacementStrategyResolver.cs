@@ -16,10 +16,9 @@ namespace Orleans.Runtime.Placement
     /// </summary>
     public sealed class PlacementFilterResolver
     {
-        private readonly ConcurrentDictionary<GrainType, PlacementFilter> _resolvedStrategies = new();
-        private readonly Func<GrainType, PlacementFilter> _getStrategyInternal;
+        private readonly ConcurrentDictionary<GrainType, PlacementFilter[]> _resolvedFilters = new();
+        private readonly Func<GrainType, PlacementFilter[]> _getFiltersInternal;
         private readonly GrainPropertiesResolver _grainPropertiesResolver;
-        private readonly PlacementFilter _defaultPlacementStrategy;
         private readonly IServiceProvider _services;
 
         /// <summary>
@@ -27,54 +26,43 @@ namespace Orleans.Runtime.Placement
         /// </summary>
         public PlacementFilterResolver(
             IServiceProvider services,
-            IEnumerable<IPlacementStrategyResolver> resolvers,
             GrainPropertiesResolver grainPropertiesResolver)
         {
             _services = services;
-            _getStrategyInternal = GetPlacementStrategyInternal;
+            _getFiltersInternal = GetPlacementStrategyInternal;
             _grainPropertiesResolver = grainPropertiesResolver;
-            _defaultPlacementStrategy = services.GetService<PlacementFilter>();
         }
 
         /// <summary>
         /// Gets the placement strategy associated with the provided grain type.
         /// </summary>
-        public PlacementFilter GetPlacementStrategy(GrainType grainType) => _resolvedStrategies.GetOrAdd(grainType, _getStrategyInternal);
+        public PlacementFilter[] GetPlacementFilters(GrainType grainType) => _resolvedFilters.GetOrAdd(grainType, _getFiltersInternal);
 
-        private bool TryGetNonDefaultPlacementStrategy(GrainType grainType, out PlacementFilter strategy)
+        private PlacementFilter[] GetPlacementStrategyInternal(GrainType grainType)
         {
             _grainPropertiesResolver.TryGetGrainProperties(grainType, out var properties);
 
             if (properties is not null
-                && properties.Properties.TryGetValue(WellKnownGrainTypeProperties.PlacementStrategy, out var placementStrategyId)
+                && properties.Properties.TryGetValue(WellKnownGrainTypeProperties.PlacementFilter, out var placementStrategyId)
                 && !string.IsNullOrWhiteSpace(placementStrategyId))
             {
-                strategy = _services.GetKeyedService<PlacementFilter>(placementStrategyId);
-                if (strategy is not null)
+                var filterList = new List<PlacementFilter>();
+                foreach (var filterId in placementStrategyId.Split(","))
                 {
-                    strategy.Initialize(properties);
-                    return true;
+                    var filter = _services.GetKeyedService<PlacementFilter>(filterId);
+                    if (filter is not null)
+                    {
+                        filter.Initialize(properties);
+                        filterList.Add(filter);
+                    }
                 }
-                else
-                {
-                    throw new KeyNotFoundException($"Could not resolve placement strategy {placementStrategyId} for grain type {grainType}.");
-                }
+                return filterList.ToArray();
             }
 
-            strategy = default;
-            return false;
-        }
-
-        private PlacementFilter GetPlacementStrategyInternal(GrainType grainType)
-        {
-            if (TryGetNonDefaultPlacementStrategy(grainType, out var result))
-            {
-                return result;
-            }
-
-            return _defaultPlacementStrategy;
+            return [];
         }
     }
+
     /// <summary>
     /// Responsible for resolving an <see cref="PlacementStrategy"/> for a <see cref="GrainType"/>.
     /// </summary>
