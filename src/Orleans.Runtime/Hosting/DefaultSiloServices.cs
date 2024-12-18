@@ -44,7 +44,9 @@ using Orleans.Serialization.Internal;
 using Orleans.Core;
 using Orleans.Placement.Repartitioning;
 using Orleans.GrainDirectory;
+using Orleans.Placement;
 using Orleans.Runtime.Hosting;
+using Orleans.Runtime.MembershipService.SiloMetadata;
 
 namespace Orleans.Hosting
 {
@@ -201,6 +203,9 @@ namespace Orleans.Hosting
             services.AddSingleton<PlacementService>();
             services.AddSingleton<PlacementStrategyResolver>();
             services.AddSingleton<PlacementDirectorResolver>();
+            services.AddSingleton<PlacementFilterResolver>();
+            services.AddSingleton<FilterDirectorResolver>();
+            services.AddSingleton<SiloMetadataCache>();
             services.AddSingleton<IPlacementStrategyResolver, ClientObserverPlacementStrategyResolver>();
 
             // Configure the default placement strategy.
@@ -215,6 +220,13 @@ namespace Orleans.Hosting
             services.AddPlacementDirector<ClientObserversPlacement, ClientObserversPlacementDirector>();
             services.AddPlacementDirector<SiloRoleBasedPlacement, SiloRoleBasedPlacementDirector>();
             services.AddPlacementDirector<ResourceOptimizedPlacement, ResourceOptimizedPlacementDirector>();
+            services.AddSingleton<ResourceOptimizedPlacementLogic>();
+            services.AddPlacementDirector<SiloMetadataPlacement, SiloMetadataPlacementDirector>();
+            services.AddSingleton<SiloStatisticsCache>();
+
+            // Placement filters
+            services.AddPlacementFilter<PreferredSiloMetadataPlacementFilter, PreferredSiloMetadataFilterDirector>(ServiceLifetime.Transient);
+            services.AddPlacementFilter<RequiredSiloMetadataPlacementFilter, RequiredSiloMetadataFilterDirector>(ServiceLifetime.Transient);
 
             // Versioning
             services.TryAddSingleton<VersionSelectorManager>();

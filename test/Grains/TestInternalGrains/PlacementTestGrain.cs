@@ -208,6 +208,8 @@ namespace UnitTests.Grains
     }
 
     [ActivationCountBasedPlacement]
+    [PreferredSiloMetadataPlacementFilter(["cloud.zone", "cloud.region", "cloud.provider"])]
+    [RequiredSiloMetadataPlacementFilter(["cloud.geo"])]
     internal class ActivationCountBasedPlacementTestGrain : PlacementTestGrainBase, IActivationCountBasedPlacementTestGrain
     {
         public ActivationCountBasedPlacementTestGrain(

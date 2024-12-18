@@ -12,6 +12,58 @@ using Orleans.GrainDirectory;
 namespace Orleans.Runtime.Placement
 {
     /// <summary>
+    /// Responsible for resolving an <see cref="PlacementFilter"/> for a <see cref="GrainType"/>.
+    /// </summary>
+    public sealed class PlacementFilterResolver
+    {
+        private readonly ConcurrentDictionary<GrainType, PlacementFilter[]> _resolvedFilters = new();
+        private readonly Func<GrainType, PlacementFilter[]> _getFiltersInternal;
+        private readonly GrainPropertiesResolver _grainPropertiesResolver;
+        private readonly IServiceProvider _services;
+
+        /// <summary>
+        /// Create a <see cref="PlacementStrategyResolver"/> instance.
+        /// </summary>
+        public PlacementFilterResolver(
+            IServiceProvider services,
+            GrainPropertiesResolver grainPropertiesResolver)
+        {
+            _services = services;
+            _getFiltersInternal = GetPlacementStrategyInternal;
+            _grainPropertiesResolver = grainPropertiesResolver;
+        }
+
+        /// <summary>
+        /// Gets the placement strategy associated with the provided grain type.
+        /// </summary>
+        public PlacementFilter[] GetPlacementFilters(GrainType grainType) => _resolvedFilters.GetOrAdd(grainType, _getFiltersInternal);
+
+        private PlacementFilter[] GetPlacementStrategyInternal(GrainType grainType)
+        {
+            _grainPropertiesResolver.TryGetGrainProperties(grainType, out var properties);
+
+            if (properties is not null
+                && properties.Properties.TryGetValue(WellKnownGrainTypeProperties.PlacementFilter, out var placementStrategyId)
+                && !string.IsNullOrWhiteSpace(placementStrategyId))
+            {
+                var filterList = new List<PlacementFilter>();
+                foreach (var filterId in placementStrategyId.Split(","))
+                {
+                    var filter = _services.GetKeyedService<PlacementFilter>(filterId);
+                    if (filter is not null)
+                    {
+                        filter.Initialize(properties);
+                        filterList.Add(filter);
+                    }
+                }
+                return filterList.ToArray();
+            }
+
+            return [];
+        }
+    }
+
+    /// <summary>
     /// Responsible for resolving an <see cref="PlacementStrategy"/> for a <see cref="GrainType"/>.
     /// </summary>
     public sealed class PlacementStrategyResolver
