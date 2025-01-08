@@ -114,6 +114,18 @@ namespace Orleans.Placement
     }
 
     /// <summary>
+    /// Marks a grain class as using the <see cref="SiloMetadataPlacement"/> policy.
+    /// </summary>
+    /// <inheritdoc cref="SiloMetadataPlacement"/>
+    [AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
+    public sealed class SiloMetadataPlacementAttribute : PlacementAttribute
+    {
+        public SiloMetadataPlacementAttribute() :
+            base(SiloMetadataPlacement.Singleton)
+        { }
+    }
+
+    /// <summary>
     /// Ensures that activations of this grain type will not be migrated automatically.
     /// </summary>
     /// <remarks>Activations can still be migrated by user initiated code.</remarks>
