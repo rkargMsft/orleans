@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Threading.Tasks;
 using Cassandra;
 using Orleans.Configuration;
+using Orleans.Cassandra;
 
 namespace Orleans.Clustering.Cassandra.Hosting;
 
@@ -52,7 +53,8 @@ public class CassandraClusteringOptions
     public void ConfigureClient(string connectionString, string keyspace = "orleans")
     {
         ArgumentException.ThrowIfNullOrEmpty(connectionString);
-        ArgumentNullException.ThrowIfNull(keyspace);
+        var normalizedKeyspace = CassandraIdentifier.Normalize(keyspace);
+        Keyspace = normalizedKeyspace;
         OwnsSession = true;
         CreateSessionAsync = async sp =>
         {
@@ -62,7 +64,7 @@ public class CassandraClusteringOptions
             var connected = false;
             try
             {
-                var session = await c.ConnectAsync(keyspace).ConfigureAwait(false);
+                var session = await c.ConnectAsync(normalizedKeyspace).ConfigureAwait(false);
                 connected = true;
                 return session;
             }
@@ -92,4 +94,6 @@ public class CassandraClusteringOptions
     internal Func<IServiceProvider, Task<ISession>> CreateSessionAsync { get; private set; } = default!;
 
     internal bool OwnsSession { get; private set; }
+
+    internal string? Keyspace { get; private set; }
 }
